@@ -1,14 +1,14 @@
 ---
 title: Next.jsとClaude APIで作れる便利ツール3選【初心者でも1日で完成】
 tags:
-  - Next.js
-  - TypeScript
-  - Claude
-  - AI
   - 初心者
+  - TypeScript
+  - AI
+  - Next.js
+  - Claude
 private: false
-updated_at: ''
-id: null
+updated_at: '2026-03-23T15:34:07+09:00'
+id: 59996711b833170ca787
 organization_url_name: null
 slide: false
 ignorePublish: false
