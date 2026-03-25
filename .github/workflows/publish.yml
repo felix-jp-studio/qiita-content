@@ -23,7 +23,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: increments/qiita-cli/actions/publish@v1
-        with:
-          qiita-token: ${{ secrets.QIITA_TOKEN }}
-          root: "."
+
+      - name: Detect changed Qiita articles
+        id: detect_changed
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            changed_files="$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- 'public/*.md' || true)"
+          else
+            # workflow_dispatch の場合は public の全 md を対象にする
+            changed_files="$(ls -1 public/*.md 2>/dev/null || true)"
+          fi
+
+          if [ -z "$changed_files" ]; then
+            echo "changed_basenames=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_basenames="$(echo "$changed_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ')"
+          echo "changed_basenames=$changed_basenames" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to Qiita (changed articles only)
+        if: steps.detect_changed.outputs.changed_basenames != ''
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+        shell: bash
+        run: |
+          npm install -g @qiita/qiita-cli@v1.8.0
+          qiita publish --root . ${{ steps.detect_changed.outputs.changed_basenames }}
+
+          git add public/*.md
+          if ! git diff --staged --exit-code --quiet; then
+            git config --global user.name 'github-actions[bot]'
+            git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "Updated by qiita-cli"
+            git push
+          fi
