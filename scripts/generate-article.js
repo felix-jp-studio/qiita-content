@@ -96,8 +96,11 @@ const options = {
   },
 };
 
-const MAX_ATTEMPTS = 5;
+// 生成失敗（例: 529 Overloaded）時に一定時間リトライして成功率を上げる
+// 目安: 約2〜5分程度を上限にするため、指数バックオフ + 上限待機時間を併用。
+const MAX_ATTEMPTS = 9;
 const RETRY_BASE_MS = 2000;
+const MAX_RETRY_DELAY_MS = 30000; // 32s以上は待たない
 
 function shouldRetryClaude({ statusCode, json, attempt }) {
   if (attempt >= MAX_ATTEMPTS) return false;
@@ -114,7 +117,8 @@ function shouldRetryClaude({ statusCode, json, attempt }) {
 
 function retryDelayMs(attempt) {
   // attempt: 1 -> 1s, 2 -> 2s, 3 -> 4s ...
-  return RETRY_BASE_MS * 2 ** (attempt - 1);
+  const delay = RETRY_BASE_MS * 2 ** (attempt - 1);
+  return Math.min(delay, MAX_RETRY_DELAY_MS);
 }
 
 function sendRequest(attempt) {
