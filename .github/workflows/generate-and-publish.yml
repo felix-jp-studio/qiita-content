@@ -27,14 +27,36 @@ jobs:
           node scripts/generate-article.js
 
       - name: Commit and push
+        id: commit_and_push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/
+          changed_files="$(git diff --name-only --cached -- 'public/*.md' || true)"
+          if [ -z "$changed_files" ]; then
+            echo "changed_basenames=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_basenames="$(echo "$changed_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ')"
+          echo "changed_basenames=$changed_basenames" >> "$GITHUB_OUTPUT"
+
           git diff --staged --quiet || git commit -m "auto: add article $(date +'%Y%m%d')"
           git push
 
-      - name: Publish to Qiita
-        uses: increments/qiita-cli/actions/publish@v1
-        with:
-          qiita-token: ${{ secrets.QIITA_TOKEN }}
+      - name: Publish to Qiita (changed articles only)
+        if: steps.commit_and_push.outputs.changed_basenames != ''
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+        run: |
+          npm install -g @qiita/qiita-cli@v1.8.0
+          qiita publish --root . ${{ steps.commit_and_push.outputs.changed_basenames }}
+
+          # qiita-cli が更新した frontmatter（id / updated_at）を repo に反映
+          git add public/*.md
+          if ! git diff --staged --exit-code --quiet; then
+            git config --global user.name 'github-actions[bot]'
+            git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "Updated by qiita-cli"
+            git push
+          fi
