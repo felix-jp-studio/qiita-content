@@ -62,6 +62,28 @@ const body = JSON.stringify({
   messages: [{ role: 'user', content: prompt }],
 });
 
+function extractAnthropicText(json) {
+  // Typical response shape:
+  // { content: [ { type: 'text', text: '...' }, ... ] }
+  if (!json) return '';
+  if (Array.isArray(json.content)) {
+    const texts = json.content
+      .filter(
+        (block) =>
+          block &&
+          block.type === 'text' &&
+          typeof block.text === 'string'
+      )
+      .map((block) => block.text.trim())
+      .filter(Boolean);
+    return texts.join('\n\n');
+  }
+
+  // Fallback for unexpected shapes
+  if (typeof json.content === 'string') return json.content.trim();
+  return '';
+}
+
 const options = {
   hostname: 'api.anthropic.com',
   path: '/v1/messages',
@@ -77,8 +99,46 @@ const req = https.request(options, res => {
   let data = '';
   res.on('data', chunk => (data += chunk));
   res.on('end', () => {
-    const json = JSON.parse(data);
-    const text = json.content[0].text;
+    let json;
+    try {
+      json = JSON.parse(data);
+    } catch (e) {
+      console.error('Claude API returned non-JSON response');
+      console.error(`response_snippet=${data.slice(0, 500)}`);
+      process.exit(1);
+    }
+
+    // Claude API errors or non-2xx responses may not include `content`.
+    if (res.statusCode && res.statusCode >= 400) {
+      console.error('Claude API request failed');
+      console.error(`statusCode=${res.statusCode}`);
+      if (json && json.error) {
+        console.error(
+          `error=${json.error.type || ''} ${json.error.message || ''}`.trim()
+        );
+      }
+      console.error(`response_snippet=${data.slice(0, 500)}`);
+      process.exit(1);
+    }
+
+    if (json && json.error) {
+      console.error('Claude API returned error payload');
+      console.error(
+        `error=${json.error.type || ''} ${json.error.message || ''}`.trim()
+      );
+      console.error(`response_snippet=${data.slice(0, 500)}`);
+      process.exit(1);
+    }
+
+    const text = extractAnthropicText(json);
+    if (!text) {
+      console.error('Claude API response did not contain text content');
+      console.error(
+        `response_keys=${json ? Object.keys(json).join(',') : ''}`
+      );
+      console.error(`response_snippet=${data.slice(0, 500)}`);
+      process.exit(1);
+    }
 
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const filename = `article-${date}.md`;
