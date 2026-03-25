@@ -58,7 +58,8 @@ ignorePublish: false
 
 const body = JSON.stringify({
   model: 'claude-sonnet-4-20250514',
-  max_tokens: 4000,
+  // 目標は本文 800〜1200字程度なので、生成負荷を下げて上限を抑える
+  max_tokens: 1500,
   messages: [{ role: 'user', content: prompt }],
 });
 
@@ -95,8 +96,8 @@ const options = {
   },
 };
 
-const MAX_ATTEMPTS = 3;
-const RETRY_BASE_MS = 1000;
+const MAX_ATTEMPTS = 5;
+const RETRY_BASE_MS = 2000;
 
 function shouldRetryClaude({ statusCode, json, attempt }) {
   if (attempt >= MAX_ATTEMPTS) return false;
