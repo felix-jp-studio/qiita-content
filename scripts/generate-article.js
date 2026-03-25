@@ -95,65 +95,127 @@ const options = {
   },
 };
 
-const req = https.request(options, res => {
-  let data = '';
-  res.on('data', chunk => (data += chunk));
-  res.on('end', () => {
-    let json;
-    try {
-      json = JSON.parse(data);
-    } catch (e) {
-      console.error('Claude API returned non-JSON response');
-      console.error(`response_snippet=${data.slice(0, 500)}`);
-      process.exit(1);
-    }
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_MS = 1000;
 
-    // Claude API errors or non-2xx responses may not include `content`.
-    if (res.statusCode && res.statusCode >= 400) {
-      console.error('Claude API request failed');
-      console.error(`statusCode=${res.statusCode}`);
+function shouldRetryClaude({ statusCode, json, attempt }) {
+  if (attempt >= MAX_ATTEMPTS) return false;
+  const errorType = json?.error?.type;
+  return (
+    statusCode === 429 || // rate limit
+    statusCode === 529 || // overloaded / busy
+    statusCode === 502 ||
+    statusCode === 503 ||
+    errorType === 'overloaded_error' ||
+    errorType === 'rate_limit_error'
+  );
+}
+
+function retryDelayMs(attempt) {
+  // attempt: 1 -> 1s, 2 -> 2s, 3 -> 4s ...
+  return RETRY_BASE_MS * 2 ** (attempt - 1);
+}
+
+function sendRequest(attempt) {
+  const req = https.request(options, res => {
+    let data = '';
+    res.on('data', chunk => (data += chunk));
+    res.on('end', () => {
+      const statusCode = res.statusCode || 0;
+
+      let json = null;
+      try {
+        json = JSON.parse(data);
+      } catch (e) {
+        // 非JSONでも状況コードが再試行可能ならリトライする
+        if (
+          shouldRetryClaude({
+            statusCode,
+            json: null,
+            attempt,
+          })
+        ) {
+          const delayMs = retryDelayMs(attempt);
+          console.error(
+            `Claude API response parse failed. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`
+          );
+          setTimeout(() => sendRequest(attempt + 1), delayMs);
+          return;
+        }
+        console.error('Claude API returned non-JSON response');
+        console.error(`statusCode=${statusCode}`);
+        console.error(`response_snippet=${data.slice(0, 500)}`);
+        process.exit(1);
+      }
+
+      if (shouldRetryClaude({ statusCode, json, attempt })) {
+        const delayMs = retryDelayMs(attempt);
+        const errorType = json?.error?.type || '';
+        console.error(
+          `Claude API overloaded/limited. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`
+        );
+        console.error(`statusCode=${statusCode} errorType=${errorType}`.trim());
+        console.error(`response_snippet=${data.slice(0, 200)}`);
+        setTimeout(() => sendRequest(attempt + 1), delayMs);
+        return;
+      }
+
+      // No retry: fail safely.
+      if (statusCode >= 400) {
+        console.error('Claude API request failed');
+        console.error(`statusCode=${statusCode}`);
+        if (json && json.error) {
+          console.error(
+            `error=${json.error.type || ''} ${json.error.message || ''}`.trim()
+          );
+        }
+        console.error(`response_snippet=${data.slice(0, 500)}`);
+        process.exit(1);
+      }
+
       if (json && json.error) {
+        console.error('Claude API returned error payload');
         console.error(
           `error=${json.error.type || ''} ${json.error.message || ''}`.trim()
         );
+        console.error(`response_snippet=${data.slice(0, 500)}`);
+        process.exit(1);
       }
-      console.error(`response_snippet=${data.slice(0, 500)}`);
-      process.exit(1);
-    }
 
-    if (json && json.error) {
-      console.error('Claude API returned error payload');
-      console.error(
-        `error=${json.error.type || ''} ${json.error.message || ''}`.trim()
-      );
-      console.error(`response_snippet=${data.slice(0, 500)}`);
-      process.exit(1);
-    }
+      const text = extractAnthropicText(json);
+      if (!text) {
+        console.error('Claude API response did not contain text content');
+        console.error(`response_keys=${Object.keys(json).join(',')}`);
+        console.error(`response_snippet=${data.slice(0, 500)}`);
+        process.exit(1);
+      }
 
-    const text = extractAnthropicText(json);
-    if (!text) {
-      console.error('Claude API response did not contain text content');
-      console.error(
-        `response_keys=${json ? Object.keys(json).join(',') : ''}`
-      );
-      console.error(`response_snippet=${data.slice(0, 500)}`);
-      process.exit(1);
-    }
+      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const filename = `article-${date}.md`;
+      const filepath = path.join('public', filename);
 
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const filename = `article-${date}.md`;
-    const filepath = path.join('public', filename);
-
-    fs.mkdirSync('public', { recursive: true });
-    fs.writeFileSync(filepath, text);
-    console.log(`Generated: ${filepath}`);
+      fs.mkdirSync('public', { recursive: true });
+      fs.writeFileSync(filepath, text);
+      console.log(`Generated: ${filepath}`);
+    });
   });
-});
 
-req.on('error', e => {
-  console.error('Error:', e);
-  process.exit(1);
-});
+  req.on('error', e => {
+    if (attempt < MAX_ATTEMPTS) {
+      const delayMs = retryDelayMs(attempt);
+      console.error(
+        `Claude API request error. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`
+      );
+      console.error(`message=${e && e.message ? e.message : String(e)}`);
+      setTimeout(() => sendRequest(attempt + 1), delayMs);
+      return;
+    }
+    console.error('Claude API request error (final).', e);
+    process.exit(1);
+  });
 
-req.write(body);
-req.end();
+  req.write(body);
+  req.end();
+}
+
+sendRequest(1);
