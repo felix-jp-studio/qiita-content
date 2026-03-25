@@ -21,6 +21,7 @@ jobs:
         run: npm install
 
       - name: Generate article with Claude API
+        continue-on-error: true
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
@@ -28,6 +29,7 @@ jobs:
 
       - name: Commit and push
         id: commit_and_push
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
