@@ -1,9 +1,24 @@
-name: Generate and Publish Qiita Article
+# 記事本文の生成と PR のみ。Qiita 公開は publish.yml（main マージ後の push）が担当する。
+name: Generate Qiita Article
 
 on:
   schedule:
-    - cron: "0 23 * * *" # 毎日UTC 23:00 = JST 08:00
-  workflow_dispatch: # 手動実行も可能
+    - cron: "0 23 * * *" # 毎日 UTC 23:00 ≒ JST 翌日 08:00
+  workflow_dispatch:
+    inputs:
+      force_regenerate:
+        description: "同日の article が既にあっても上書き生成する"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: qiita-generate-article
+  cancel-in-progress: false
 
 jobs:
   generate-and-publish:
@@ -11,6 +26,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: JST date (PR タイトル・ブランチ名用)
+        id: jst
+        run: echo "ymd=$(TZ=Asia/Tokyo date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -20,45 +39,30 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Set FORCE_REGENERATE (workflow_dispatch + force のみ)
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_regenerate }}" = "true" ]; then
+            echo "FORCE_REGENERATE=1" >> "$GITHUB_ENV"
+          else
+            echo "FORCE_REGENERATE=" >> "$GITHUB_ENV"
+          fi
+
       - name: Generate article with Claude API
-        continue-on-error: true
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-        run: |
-          node scripts/generate-article.js
+        run: node scripts/generate-article.js
 
-      - name: Commit and push
-        id: commit_and_push
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/
-          changed_files="$(git diff --name-only --cached -- 'public/*.md' || true)"
-          if [ -z "$changed_files" ]; then
-            echo "changed_basenames=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "auto: add article ${{ steps.jst.outputs.ymd }}"
+          branch: auto/article-${{ steps.jst.outputs.ymd }}-${{ github.run_id }}
+          delete-branch: true
+          title: "auto: Qiita記事 ${{ steps.jst.outputs.ymd }}"
+          body: |
+            スケジュールまたは手動実行による自動生成です（日付・曜日テーマは **Asia/Tokyo** 基準）。
 
-          changed_basenames="$(echo "$changed_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ')"
-          echo "changed_basenames=$changed_basenames" >> "$GITHUB_OUTPUT"
+            - マージ後、`publish.yml` が変更された `public/*.md` を Qiita に公開し、frontmatter 更新を main にコミットします。
+            - main への直接 push は行いません（本 PR 経由で取り込んでください）。
 
-          git diff --staged --quiet || git commit -m "auto: add article $(date +'%Y%m%d')"
-          git push
-
-      - name: Publish to Qiita (changed articles only)
-        if: steps.commit_and_push.outputs.changed_basenames != ''
-        env:
-          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
-        run: |
-          npm install -g @qiita/qiita-cli@v1.8.0
-          qiita publish --root . ${{ steps.commit_and_push.outputs.changed_basenames }}
-
-          # qiita-cli が更新した frontmatter（id / updated_at）を repo に反映
-          git add public/*.md
-          if ! git diff --staged --exit-code --quiet; then
-            git config --global user.name 'github-actions[bot]'
-            git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m "Updated by qiita-cli"
-            git push
-          fi
+            手動で同日ファイルを上書きしたい場合は、`workflow_dispatch` の **force_regenerate** を有効にして再実行してください。

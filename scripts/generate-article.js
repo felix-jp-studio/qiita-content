@@ -2,15 +2,28 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const DAYS = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-];
+/** JST のカレンダー日付 YYYYMMDD（ファイル名用） */
+function jstYmdCompact() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === 'year')?.value;
+  const m = parts.find((p) => p.type === 'month')?.value;
+  const d = parts.find((p) => p.type === 'day')?.value;
+  return `${y}${m}${d}`;
+}
+
+/** JST の曜日（英語フル名、THEMES のキーと一致） */
+function jstWeekdayEnglishLong() {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo',
+    weekday: 'long',
+  }).format(new Date());
+}
+
 const THEMES = {
   Monday: 'Next.jsとClaude APIで作れる便利ツール3選',
   Tuesday: 'GitHubにpushするだけで自動デプロイを実現する方法',
@@ -21,8 +34,12 @@ const THEMES = {
   Sunday: '今週のまとめ：AIツール開発で学んだこと',
 };
 
-const day = DAYS[new Date().getDay()];
+const day = jstWeekdayEnglishLong();
 const theme = THEMES[day];
+if (!theme) {
+  console.error(`No theme for JST weekday: ${day}`);
+  process.exit(1);
+}
 
 const prompt = `あなたはエンジニア向け技術メディアのライターです。
 以下のテーマでQiita用の技術記事を書いてください。
@@ -195,9 +212,14 @@ function sendRequest(attempt) {
         process.exit(1);
       }
 
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const date = jstYmdCompact();
       const filename = `article-${date}.md`;
       const filepath = path.join('public', filename);
+
+      if (fs.existsSync(filepath) && process.env.FORCE_REGENERATE !== '1') {
+        console.log(`Skip: ${filepath} already exists (set FORCE_REGENERATE=1 to overwrite)`);
+        process.exit(0);
+      }
 
       fs.mkdirSync('public', { recursive: true });
       fs.writeFileSync(filepath, text);
