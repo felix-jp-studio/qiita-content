@@ -30,56 +30,72 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
 
-      - name: Detect unpublished Qiita articles
-        id: detect_unpublished
+      - name: Detect target Qiita articles
+        id: detect_targets
         shell: bash
         run: |
-          unpublished_basenames="$(python3 - <<'PY'
-          import glob
-          import os
-          import re
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            target_basenames="$(python3 - <<'PY'
+            import glob
+            import os
+            import re
 
-          targets = []
-          for path in sorted(glob.glob("public/*.md")):
-              try:
-                  with open(path, "r", encoding="utf-8") as f:
-                      content = f.read()
-              except UnicodeDecodeError:
-                  continue
+            targets = []
+            for path in sorted(glob.glob("public/*.md")):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    continue
 
-              parts = content.split("---", 2)
-              if len(parts) < 3:
-                  continue
-              frontmatter = parts[1]
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    continue
+                frontmatter = parts[1]
 
-              id_match = re.search(r"^id:\s*(.+)$", frontmatter, re.MULTILINE)
-              ignore_match = re.search(r"^ignorePublish:\s*(.+)$", frontmatter, re.MULTILINE)
+                id_match = re.search(r"^id:\s*(.+)$", frontmatter, re.MULTILINE)
+                ignore_match = re.search(r"^ignorePublish:\s*(.+)$", frontmatter, re.MULTILINE)
 
-              id_value = id_match.group(1).strip() if id_match else ""
-              ignore_value = ignore_match.group(1).strip().lower() if ignore_match else "false"
+                id_value = id_match.group(1).strip() if id_match else ""
+                ignore_value = ignore_match.group(1).strip().lower() if ignore_match else "false"
 
-              if id_value == "null" and ignore_value == "false":
-                  targets.append(os.path.splitext(os.path.basename(path))[0])
+                if id_value == "null" and ignore_value == "false":
+                    targets.append(os.path.splitext(os.path.basename(path))[0])
 
-          print(" ".join(targets))
-          PY
-          )"
-
-          echo "unpublished_basenames=$unpublished_basenames" >> "$GITHUB_OUTPUT"
-          if [ -z "$unpublished_basenames" ]; then
-            echo "No unpublished Qiita articles found."
+            print(" ".join(targets))
+            PY
+            )"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            target_files="$(git diff --name-only "${{ github.event.workflow_run.head_sha }}^" "${{ github.event.workflow_run.head_sha }}" -- 'public/*.md' || true)"
+            target_basenames="$(echo "$target_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ' | xargs)"
           else
-            echo "Targets: $unpublished_basenames"
+            target_files="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'public/*.md' || true)"
+            target_basenames="$(echo "$target_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ' | xargs)"
           fi
 
-      - name: Publish to Qiita (unpublished articles only)
-        if: steps.detect_unpublished.outputs.unpublished_basenames != ''
+          echo "target_basenames=$target_basenames" >> "$GITHUB_OUTPUT"
+          if [ -z "$target_basenames" ]; then
+            echo "No target Qiita articles found."
+          else
+            echo "Targets: $target_basenames"
+          fi
+
+      - name: Publish to Qiita (target articles only)
+        if: steps.detect_targets.outputs.target_basenames != ''
         env:
           QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
         shell: bash
         run: |
           npm install -g @qiita/qiita-cli@v1.8.0
-          qiita publish --root . ${{ steps.detect_unpublished.outputs.unpublished_basenames }}
+          failed_basenames=""
+          for basename in ${{ steps.detect_targets.outputs.target_basenames }}; do
+            if qiita publish --root . "$basename"; then
+              echo "Published: $basename"
+            else
+              echo "Publish failed: $basename"
+              failed_basenames="$failed_basenames $basename"
+            fi
+          done
 
           git add public/*.md
           if ! git diff --staged --exit-code --quiet; then
@@ -87,4 +103,9 @@ jobs:
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git commit -m "Updated by qiita-cli"
             git push origin HEAD:main
+          fi
+
+          if [ -n "$failed_basenames" ]; then
+            echo "Failed basenames:$failed_basenames"
+            exit 1
           fi
