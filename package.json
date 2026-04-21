@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "sync:qiita-ids": "node scripts/sync-qiita-ids.js",
+    "sync:qiita-ids:dry-run": "node scripts/sync-qiita-ids.js --dry-run",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
