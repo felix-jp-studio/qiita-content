@@ -35,36 +35,19 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            target_basenames="$(python3 - <<'PY'
-            import glob
-            import os
-            import re
+            target_basenames=""
+            for file in public/*.md; do
+              [ -f "$file" ] || continue
+              id_value="$(awk -F': *' '/^id:/{print $2; exit}' "$file")"
+              ignore_value="$(awk -F': *' '/^ignorePublish:/{print tolower($2); exit}' "$file")"
 
-            targets = []
-            for path in sorted(glob.glob("public/*.md")):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                except UnicodeDecodeError:
-                    continue
-
-                parts = content.split("---", 2)
-                if len(parts) < 3:
-                    continue
-                frontmatter = parts[1]
-
-                id_match = re.search(r"^id:\s*(.+)$", frontmatter, re.MULTILINE)
-                ignore_match = re.search(r"^ignorePublish:\s*(.+)$", frontmatter, re.MULTILINE)
-
-                id_value = id_match.group(1).strip() if id_match else ""
-                ignore_value = ignore_match.group(1).strip().lower() if ignore_match else "false"
-
-                if id_value == "null" and ignore_value == "false":
-                    targets.append(os.path.splitext(os.path.basename(path))[0])
-
-            print(" ".join(targets))
-            PY
-            )"
+              if [ "$id_value" = "null" ] && [ "${ignore_value:-false}" = "false" ]; then
+                basename="${file#public/}"
+                basename="${basename%.md}"
+                target_basenames="$target_basenames $basename"
+              fi
+            done
+            target_basenames="$(echo "$target_basenames" | xargs)"
           elif [ "${{ github.event_name }}" = "workflow_run" ]; then
             target_files="$(git diff --name-only "${{ github.event.workflow_run.head_sha }}^" "${{ github.event.workflow_run.head_sha }}" -- 'public/*.md' || true)"
             target_basenames="$(echo "$target_files" | sed -E 's#^public/##; s#\.md$##' | tr '\n' ' ' | xargs)"
