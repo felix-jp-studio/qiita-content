@@ -1,4 +1,4 @@
-# 記事生成後に main へ直接 push。Qiita 公開は publish.yml（push トリガー）が担当。
+# 記事生成後に main へ直接 push。Qiita 公開は publish.yml（workflow_run / push）が担当。
 name: Generate Qiita Article
 
 on:
