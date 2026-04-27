@@ -6,7 +6,7 @@ tags:
   - Next.js
   - Vercel
 private: false
-updated_at: '2026-04-27T08:39:45+09:00'
+updated_at: '2026-04-28T08:54:22+09:00'
 id: fe75dce85ebe88cd5feb
 organization_url_name: null
 slide: false
